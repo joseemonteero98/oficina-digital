@@ -1,22 +1,65 @@
 -- ==============================================================================
 -- SISTEMA DE CRÉDITO Y COBRANZA EN CAMPO ("OFICINA DIGITAL")
--- ESQUEMA COMPLETO POSTGRESQL + ROW LEVEL SECURITY (RLS) PARA SUPABASE
+-- ESQUEMA COMPLETO POSTGRESQL + TRIGGERS + RLS PARA SUPABASE
 -- ==============================================================================
 
 -- 1. EXTENSIONES
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. ENUMS
-CREATE TYPE rol_usuario AS ENUM ('dueno', 'admin', 'supervisor', 'cobrador');
-CREATE TYPE frecuencia_pago AS ENUM ('diario', 'semanal', 'quincenal', 'mensual');
-CREATE TYPE tipo_interes AS ENUM ('fijo', 'sobre_saldo');
-CREATE TYPE estado_prestamo AS ENUM ('pendiente', 'aprobado', 'rechazado', 'activo', 'pagado', 'mora');
-CREATE TYPE estado_cuota AS ENUM ('pendiente', 'parcial', 'pagada', 'atrasada');
-CREATE TYPE tipo_pago AS ENUM ('cuota_completa', 'abono', 'no_pago');
-CREATE TYPE estado_cierre AS ENUM ('abierto', 'pendiente_revision', 'aprobado');
+-- 2. TIPOS ENUM PERSONALIZADOS
+DO $$ BEGIN
+    CREATE TYPE rol_usuario AS ENUM ('dueno', 'admin', 'supervisor', 'cobrador');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
--- 3. TABLA: OFICINAS (Empresas / Sucursales)
-CREATE TABLE public.oficinas (
+DO $$ BEGIN
+    CREATE TYPE frecuencia_pago AS ENUM ('diario', 'semanal', 'quincenal', 'mensual');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE tipo_interes AS ENUM ('fijo', 'sobre_saldo');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE estado_prestamo AS ENUM ('pendiente', 'aprobado', 'rechazado', 'activo', 'pagado', 'mora');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE estado_cuota AS ENUM ('pendiente', 'parcial', 'pagada', 'atrasada');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE tipo_pago AS ENUM ('cuota_completa', 'abono', 'no_pago');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE estado_cierre AS ENUM ('abierto', 'pendiente_revision', 'aprobado');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- 3. FUNCIÓN PARA AUTO-ACTUALIZAR updated_at
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 4. TABLA: OFICINAS (Empresas / Sucursales)
+CREATE TABLE IF NOT EXISTS public.oficinas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     nombre VARCHAR(150) NOT NULL,
     ciudad VARCHAR(100) NOT NULL,
@@ -28,10 +71,14 @@ CREATE TABLE public.oficinas (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. TABLA: PERFILES (Usuarios y Roles del Sistema vinculados a auth.users)
-CREATE TABLE public.perfiles (
+CREATE TRIGGER tr_oficinas_updated_at
+BEFORE UPDATE ON public.oficinas
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- 5. TABLA: PERFILES (Usuarios del sistema vinculados a auth.users)
+CREATE TABLE IF NOT EXISTS public.perfiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    oficina_id UUID REFERENCES public.oficinas(id) ON DELETE SET NULL, -- Null para Dueño global
+    oficina_id UUID REFERENCES public.oficinas(id) ON DELETE SET NULL, -- Null si es Dueño global
     supervisor_id UUID REFERENCES public.perfiles(id) ON DELETE SET NULL, -- Para cobradores
     nombre_completo VARCHAR(150) NOT NULL,
     telefono VARCHAR(50),
@@ -41,8 +88,12 @@ CREATE TABLE public.perfiles (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 5. TABLA: RUTAS DE COBRO
-CREATE TABLE public.rutas (
+CREATE TRIGGER tr_perfiles_updated_at
+BEFORE UPDATE ON public.perfiles
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- 6. TABLA: RUTAS DE COBRO
+CREATE TABLE IF NOT EXISTS public.rutas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
     cobrador_id UUID REFERENCES public.perfiles(id) ON DELETE SET NULL,
@@ -52,8 +103,8 @@ CREATE TABLE public.rutas (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 6. TABLA: CLIENTES
-CREATE TABLE public.clientes (
+-- 7. TABLA: CLIENTES
+CREATE TABLE IF NOT EXISTS public.clientes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
     ruta_id UUID REFERENCES public.rutas(id) ON DELETE SET NULL,
@@ -71,8 +122,12 @@ CREATE TABLE public.clientes (
     CONSTRAINT uq_oficina_documento UNIQUE(oficina_id, documento)
 );
 
--- 7. TABLA: PRESTAMOS
-CREATE TABLE public.prestamos (
+CREATE TRIGGER tr_clientes_updated_at
+BEFORE UPDATE ON public.clientes
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- 8. TABLA: PRESTAMOS
+CREATE TABLE IF NOT EXISTS public.prestamos (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     codigo VARCHAR(50) NOT NULL,
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
@@ -106,8 +161,12 @@ CREATE TABLE public.prestamos (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 8. TABLA: CUOTAS
-CREATE TABLE public.cuotas (
+CREATE TRIGGER tr_prestamos_updated_at
+BEFORE UPDATE ON public.prestamos
+FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- 9. TABLA: CUOTAS (Calendario / Amortización)
+CREATE TABLE IF NOT EXISTS public.cuotas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     prestamo_id UUID NOT NULL REFERENCES public.prestamos(id) ON DELETE CASCADE,
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
@@ -124,8 +183,8 @@ CREATE TABLE public.cuotas (
     CONSTRAINT uq_prestamo_cuota UNIQUE(prestamo_id, numero_cuota)
 );
 
--- 9. TABLA: REGISTROS DE PAGO (Auditoría de Recaudos)
-CREATE TABLE public.pagos (
+-- 10. TABLA: PAGOS (Recaudos y Abonos en Calle)
+CREATE TABLE IF NOT EXISTS public.pagos (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
     prestamo_id UUID NOT NULL REFERENCES public.prestamos(id) ON DELETE CASCADE,
@@ -142,8 +201,8 @@ CREATE TABLE public.pagos (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 10. TABLA: CIERRES DE CAJA (Arqueo Diario)
-CREATE TABLE public.cierres_caja (
+-- 11. TABLA: CIERRES DE CAJA (Arqueo Diario)
+CREATE TABLE IF NOT EXISTS public.cierres_caja (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     oficina_id UUID NOT NULL REFERENCES public.oficinas(id) ON DELETE CASCADE,
     cobrador_id UUID NOT NULL REFERENCES public.perfiles(id) ON DELETE RESTRICT,
@@ -163,6 +222,43 @@ CREATE TABLE public.cierres_caja (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT uq_cobrador_fecha_cierre UNIQUE(cobrador_id, fecha)
 );
+
+-- ==============================================================================
+-- ÍNDICES PARA ALTO RENDIMIENTO
+-- ==============================================================================
+CREATE INDEX IF NOT EXISTS idx_perfiles_oficina ON public.perfiles(oficina_id);
+CREATE INDEX IF NOT EXISTS idx_clientes_oficina ON public.clientes(oficina_id);
+CREATE INDEX IF NOT EXISTS idx_clientes_ruta ON public.clientes(ruta_id);
+CREATE INDEX IF NOT EXISTS idx_prestamos_oficina ON public.prestamos(oficina_id);
+CREATE INDEX IF NOT EXISTS idx_prestamos_cliente ON public.prestamos(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_prestamos_estado ON public.prestamos(estado);
+CREATE INDEX IF NOT EXISTS idx_cuotas_prestamo ON public.cuotas(prestamo_id);
+CREATE INDEX IF NOT EXISTS idx_cuotas_vencimiento ON public.cuotas(fecha_vencimiento);
+CREATE INDEX IF NOT EXISTS idx_pagos_prestamo ON public.pagos(prestamo_id);
+CREATE INDEX IF NOT EXISTS idx_pagos_fecha ON public.pagos(fecha_pago);
+CREATE INDEX IF NOT EXISTS idx_cierres_cobrador_fecha ON public.cierres_caja(cobrador_id, fecha);
+
+-- ==============================================================================
+-- AUTOMATIZACIÓN DE PERFIL AL REGISTRAR USUARIO (AUTH.USERS TRIGGER)
+-- ==============================================================================
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.perfiles (id, nombre_completo, telefono, rol)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'nombre_completo', NEW.email),
+    COALESCE(NEW.raw_user_meta_data->>'telefono', ''),
+    COALESCE((NEW.raw_user_meta_data->>'rol')::rol_usuario, 'cobrador')
+  );
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- ==============================================================================
 -- POLÍTICAS DE SEGURIDAD (ROW LEVEL SECURITY - RLS)
@@ -190,23 +286,41 @@ RETURNS UUID AS $$
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- POLÍTICAS: OFICINAS
-CREATE POLICY "Dueños ven todas las oficinas" ON public.oficinas
+CREATE POLICY "Dueños gestionan todas las oficinas" ON public.oficinas
     FOR ALL USING (public.get_auth_role() = 'dueno');
 
 CREATE POLICY "Usuarios ven su propia oficina" ON public.oficinas
     FOR SELECT USING (id = public.get_auth_oficina_id());
 
+-- POLÍTICAS: PERFILES
+CREATE POLICY "Dueño y Admin gestionan perfiles" ON public.perfiles
+    FOR ALL USING (public.get_auth_role() IN ('dueno', 'admin'));
+
+CREATE POLICY "Usuarios leen perfiles de su oficina" ON public.perfiles
+    FOR SELECT USING (
+      public.get_auth_role() = 'dueno' OR
+      oficina_id = public.get_auth_oficina_id() OR
+      id = auth.uid()
+    );
+
+-- POLÍTICAS: CLIENTES
+CREATE POLICY "Dueño y Admin ven todos los clientes de la oficina" ON public.clientes
+    FOR ALL USING (
+      public.get_auth_role() = 'dueno' OR
+      oficina_id = public.get_auth_oficina_id()
+    );
+
 -- POLÍTICAS: PRESTAMOS
-CREATE POLICY "Dueño ve todos los préstamos" ON public.prestamos
+CREATE POLICY "Dueño gestiona todos los préstamos" ON public.prestamos
     FOR ALL USING (public.get_auth_role() = 'dueno');
 
-CREATE POLICY "Admin y Supervisor ven préstamos de su oficina" ON public.prestamos
+CREATE POLICY "Admin y Supervisor gestionan préstamos de su oficina" ON public.prestamos
     FOR ALL USING (
       oficina_id = public.get_auth_oficina_id() AND
       public.get_auth_role() IN ('admin', 'supervisor')
     );
 
-CREATE POLICY "Cobrador ve y crea sus propios préstamos" ON public.prestamos
+CREATE POLICY "Cobrador ve sus propios préstamos" ON public.prestamos
     FOR SELECT USING (
       oficina_id = public.get_auth_oficina_id() AND
       cobrador_id = auth.uid()
@@ -223,6 +337,12 @@ CREATE POLICY "Cobrador inserta préstamos en estado pendiente" ON public.presta
 CREATE POLICY "Lectura de cuotas por oficina" ON public.cuotas
     FOR SELECT USING (
       public.get_auth_role() = 'dueno' OR
+      oficina_id = public.get_auth_oficina_id()
+    );
+
+CREATE POLICY "Modificación de cuotas" ON public.cuotas
+    FOR ALL USING (
+      public.get_auth_role() IN ('dueno', 'admin', 'supervisor') OR
       oficina_id = public.get_auth_oficina_id()
     );
 
@@ -246,8 +366,15 @@ CREATE POLICY "Dueño y Admin ven todos los cierres" ON public.cierres_caja
       (public.get_auth_role() = 'supervisor' AND oficina_id = public.get_auth_oficina_id())
     );
 
-CREATE POLICY "Cobrador ve y gestiona su propio cierre diario" ON public.cierres_caja
+CREATE POLICY "Cobrador gestiona su propio cierre diario" ON public.cierres_caja
     FOR ALL USING (
       cobrador_id = auth.uid() AND
       oficina_id = public.get_auth_oficina_id()
     );
+
+-- ==============================================================================
+-- OFICINA SEMILLA INICIAL PARA ARRANCAR
+-- ==============================================================================
+INSERT INTO public.oficinas (id, nombre, ciudad, telefono, excluir_domingos, tasa_interes_defecto)
+VALUES ('11111111-1111-1111-1111-111111111111', 'Oficina Central Medellín', 'Medellín', '300 456 7890', true, 20.00)
+ON CONFLICT (id) DO NOTHING;
