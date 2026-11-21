@@ -12,15 +12,15 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#020617",
+  themeColor: "#ffffff",
 };
 
 export const metadata: Metadata = {
-  title: "Oficina Digital - Sistema de Crédito y Cobranza",
+  title: "Oficina Digital Valledupar - Sistema de Cobranza en Campo",
   description: "Sistema para prestamistas y microcréditos en campo con cobro diario, semanal, quincenal y mensual.",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    statusBarStyle: "default",
     title: "Oficina Digital",
   },
 };
@@ -31,8 +31,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="es" className={`${inter.variable} h-full antialiased dark`}>
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100 font-sans">
+    <html lang="es" className={`${inter.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col bg-white text-slate-900 font-sans">
         {children}
       </body>
     </html>

@@ -2,29 +2,26 @@
 
 import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
-import { formatMoney, formatDate, getEstadoCuotaBadge, getEstadoPrestamoBadge } from '@/lib/utils';
-import { getTodayString } from '@/lib/initialData';
+import { formatMoney, formatDate } from '@/lib/utils';
 import { Prestamo, Cliente, Cuota } from '@/types';
 import {
-  Bike,
-  PlusCircle,
-  FileCheck2,
-  Wallet,
   Phone,
   MessageCircle,
   MapPin,
-  Clock,
+  CheckCircle2,
+  Wallet,
   ArrowRight,
-  Send,
-  Plus,
-  AlertTriangle,
-  Receipt,
+  Search,
   Sparkles,
 } from 'lucide-react';
 import { PaymentModal } from '@/components/PaymentModal';
-import { NewLoanModal } from '@/components/NewLoanModal';
 
-export function CobradorView() {
+interface CobradorViewProps {
+  onOpenNewLoan: () => void;
+  activeSubTab?: 'ruta' | 'caja';
+}
+
+export function CobradorView({ onOpenNewLoan, activeSubTab = 'ruta' }: CobradorViewProps) {
   const {
     prestamos,
     clientes,
@@ -34,8 +31,8 @@ export function CobradorView() {
     desembolsarPrestamo,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'ruta' | 'prestamos' | 'caja'>('ruta');
-  const [showNewLoanModal, setShowNewLoanModal] = useState<boolean>(false);
+  const [vistaInterna, setVistaInterna] = useState<'ruta' | 'caja'>(activeSubTab);
+  const [busqueda, setBusqueda] = useState<string>('');
   const [selectedForPayment, setSelectedForPayment] = useState<{
     prestamo: Prestamo;
     cliente: Cliente;
@@ -46,38 +43,38 @@ export function CobradorView() {
   const [nuevoGastoConcepto, setNuevoGastoConcepto] = useState('');
   const [nuevoGastoMonto, setNuevoGastoMonto] = useState('');
   const [cierreObservaciones, setCierreObservaciones] = useState('');
-  const [filtroPrestamos, setFiltroPrestamos] = useState<'todos' | 'aprobados' | 'activos' | 'pendientes'>('todos');
 
-  const [today, setToday] = useState('2026-02-15');
-  React.useEffect(() => {
-    setToday(getTodayString());
-  }, []);
-
-  // Préstamos asignados al cobrador
+  // Préstamos asignados
   const misPrestamos = prestamos;
 
-  // Préstamos que necesitan cobro hoy (activos o en mora)
-  const cobrosDeHoy = misPrestamos.filter(
-    (p) => p.estado === 'activo' || p.estado === 'mora'
-  ).map((p) => {
-    const cliente = clientes.find((c) => c.id === p.cliente_id)!;
-    // Buscar cuota de hoy o la más atrasada
-    const cuotaPendiente = (p.cuotas || []).find(
-      (c) => c.estado === 'pendiente' || c.estado === 'parcial' || c.estado === 'atrasada'
-    );
-    return {
-      prestamo: p,
-      cliente,
-      cuota: cuotaPendiente,
-    };
-  }).filter((item) => item.cliente);
+  // Lista de clientes por cobrar hoy en Valledupar
+  const cobrosDeHoy = misPrestamos
+    .filter((p) => p.estado === 'activo' || p.estado === 'mora')
+    .map((p) => {
+      const cliente = clientes.find((c) => c.id === p.cliente_id)!;
+      const cuotaPendiente = (p.cuotas || []).find(
+        (c) => c.estado === 'pendiente' || c.estado === 'parcial' || c.estado === 'atrasada'
+      );
+      return {
+        prestamo: p,
+        cliente,
+        cuota: cuotaPendiente,
+      };
+    })
+    .filter((item) => {
+      if (!item.cliente) return false;
+      if (!busqueda.trim()) return true;
+      const query = busqueda.toLowerCase();
+      return (
+        item.cliente.nombre_completo.toLowerCase().includes(query) ||
+        item.cliente.direccion.toLowerCase().includes(query) ||
+        (item.cliente.negocio && item.cliente.negocio.toLowerCase().includes(query))
+      );
+    });
 
-  // Préstamos aprobados esperando desembolso en efectivo
+  // Préstamos aprobados por el supervisor esperando entrega de dinero
   const aprobadosParaEntrega = misPrestamos.filter((p) => p.estado === 'aprobado');
 
-  // Metas del día
-  const metaCobroHoy = cobrosDeHoy.reduce((acc, item) => acc + (item.cuota?.monto_total || item.prestamo.valor_cuota), 0);
-  const totalCobradoHoy = cierreCaja.total_cobrado;
   const efectivoEnMano = cierreCaja.efectivo_esperado;
 
   const handleAgregarGasto = (e: React.FormEvent) => {
@@ -95,131 +92,90 @@ export function CobradorView() {
   const handleEnviarCierre = () => {
     if (confirm(`¿Confirmas entregar ${formatMoney(efectivoEnMano)} al Supervisor al cierre de jornada?`)) {
       enviarCierreCaja(efectivoEnMano, cierreObservaciones);
-      alert('¡Cierre de caja enviado al Supervisor para su revisión y arqueo!');
+      alert('¡Cierre de caja enviado al Supervisor para su revisión en oficina!');
     }
   };
 
   return (
-    <div className="max-w-md mx-auto pb-24 pt-2 px-3 sm:px-0">
+    <div className="max-w-2xl mx-auto pb-20 pt-1 px-3 sm:px-0">
       
-      {/* TARJETA SUPERIOR: METAS Y EFECTIVO EN MANO */}
-      <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-2xl p-4 shadow-xl mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
-              <Bike className="w-4 h-4" />
+      {/* Alerta si hay préstamo autorizado listo para entregar efectivo */}
+      {aprobadosParaEntrega.length > 0 && (
+        <div className="mb-3 p-3.5 bg-blue-50 border-2 border-blue-400 rounded-2xl flex items-center justify-between shadow-xs">
+          <div>
+            <div className="flex items-center gap-1.5 text-blue-900 font-black text-xs">
+              <Sparkles className="w-4 h-4 text-blue-700" />
+              <span>{aprobadosParaEntrega.length} Préstamo Autorizado Listo</span>
             </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                Turno de Cobranza en Campo
-              </span>
-              <p className="font-extrabold text-white text-sm">Brayan Martínez</p>
-            </div>
+            <p className="text-[11px] font-semibold text-blue-800 mt-0.5">
+              Autorizado por Supervisor. Entrega el dinero al cliente en la calle.
+            </p>
           </div>
-
           <button
-            onClick={() => setShowNewLoanModal(true)}
-            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-3 rounded-xl shadow-lg shadow-emerald-950 transition-transform active:scale-95"
+            onClick={() => {
+              const p = aprobadosParaEntrega[0];
+              const cliente = clientes.find((c) => c.id === p.cliente_id);
+              if (confirm(`¿Entregar ${formatMoney(p.capital)} en efectivo a ${cliente?.nombre_completo}?`)) {
+                desembolsarPrestamo(p.id);
+              }
+            }}
+            className="bg-blue-700 hover:bg-blue-800 text-white font-extrabold text-xs py-2 px-3 rounded-xl shadow-xs shrink-0"
           >
-            <PlusCircle className="w-4 h-4" />
-            + Prestar
+            Entregar $
           </button>
         </div>
+      )}
 
-        <div className="grid grid-cols-3 gap-2 text-center pt-2 border-t border-slate-800/80">
-          <div className="bg-slate-800/50 p-2.5 rounded-xl border border-slate-800">
-            <span className="text-[10px] text-slate-400 block font-medium">Meta Hoy</span>
-            <span className="text-xs font-black text-white tabular-nums">
-              {formatMoney(metaCobroHoy)}
-            </span>
-          </div>
-
-          <div className="bg-emerald-950/20 p-2.5 rounded-xl border border-emerald-500/30">
-            <span className="text-[10px] text-emerald-300 block font-bold">Cobrado Hoy</span>
-            <span className="text-xs font-black text-emerald-400 tabular-nums">
-              {formatMoney(totalCobradoHoy)}
-            </span>
-          </div>
-
-          <div className="bg-amber-950/20 p-2.5 rounded-xl border border-amber-500/30">
-            <span className="text-[10px] text-amber-300 block font-bold">Caja / En Mano</span>
-            <span className="text-xs font-black text-amber-400 tabular-nums">
-              {formatMoney(efectivoEnMano)}
-            </span>
-          </div>
-        </div>
-
-        {/* Notificación si hay préstamos aprobados listos para entregar dinero */}
-        {aprobadosParaEntrega.length > 0 && (
-          <div
-            onClick={() => {
-              setActiveTab('prestamos');
-              setFiltroPrestamos('aprobados');
-            }}
-            className="mt-3 bg-blue-500/10 border border-blue-500/30 rounded-xl p-2.5 flex items-center justify-between cursor-pointer hover:bg-blue-500/20 transition-colors"
-          >
-            <div className="flex items-center gap-2 text-xs text-blue-300 font-semibold">
-              <Sparkles className="w-4 h-4 text-blue-400 shrink-0" />
-              <span>{aprobadosParaEntrega.length} préstamo(s) autorizado(s) listo(s) para entregar dinero</span>
-            </div>
-            <ArrowRight className="w-4 h-4 text-blue-400 shrink-0" />
-          </div>
-        )}
-      </div>
-
-      {/* PESTAÑAS PRINCIPALES */}
-      <div className="flex bg-slate-900 border border-slate-800 p-1 rounded-xl mb-4 text-xs font-bold">
+      {/* Selector de subvista: Ruta o Caja */}
+      <div className="flex gap-2 mb-3">
         <button
-          onClick={() => setActiveTab('ruta')}
-          className={`flex-1 py-2 rounded-lg transition-all ${
-            activeTab === 'ruta'
-              ? 'bg-emerald-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-white'
+          onClick={() => setVistaInterna('ruta')}
+          className={`flex-1 py-2.5 text-xs font-black rounded-xl border transition-all ${
+            vistaInterna === 'ruta'
+              ? 'bg-black text-white border-black shadow-xs'
+              : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          Ruta de Hoy ({cobrosDeHoy.length})
+          Ruta de Cobro ({cobrosDeHoy.length})
         </button>
 
         <button
-          onClick={() => setActiveTab('prestamos')}
-          className={`flex-1 py-2 rounded-lg transition-all ${
-            activeTab === 'prestamos'
-              ? 'bg-emerald-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-white'
+          onClick={() => setVistaInterna('caja')}
+          className={`flex-1 py-2.5 text-xs font-black rounded-xl border transition-all ${
+            vistaInterna === 'caja'
+              ? 'bg-black text-white border-black shadow-xs'
+              : 'bg-white text-gray-800 border-gray-300 hover:bg-gray-50'
           }`}
         >
-          Préstamos ({misPrestamos.length})
-        </button>
-
-        <button
-          onClick={() => setActiveTab('caja')}
-          className={`flex-1 py-2 rounded-lg transition-all ${
-            activeTab === 'caja'
-              ? 'bg-emerald-600 text-white shadow-md'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          Mi Caja ({cierreCaja.estado === 'abierto' ? 'Abierta' : 'Enviada'})
+          Arqueo de Caja ({formatMoney(efectivoEnMano)})
         </button>
       </div>
 
-      {/* CONTENIDO TAB 1: RUTA DE HOY */}
-      {activeTab === 'ruta' && (
+      {/* ============================================================== */}
+      {/* SECCIÓN 1: RUTA DE COBRO DEL DÍA (ALTO CONTRASTE LUZ SOLAR)   */}
+      {/* ============================================================== */}
+      {vistaInterna === 'ruta' && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Clientes a Visitar en la Ruta
-            </span>
-            <span className="text-[11px] text-slate-500 font-medium">
-              Orden de calle
-            </span>
+          
+          {/* Buscador Rápido de Calle */}
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-3.5 text-gray-500" />
+            <input
+              type="text"
+              placeholder="Buscar cliente, negocio o barrio (ej. La Nevada)..."
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              className="w-full bg-white border-2 border-gray-300 rounded-xl pl-10 pr-4 py-2.5 text-sm font-bold text-black placeholder-gray-500 focus:outline-none focus:border-black"
+            />
           </div>
 
           {cobrosDeHoy.length === 0 ? (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
-              <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
-              <p className="font-bold text-sm text-white">¡Ruta al día!</p>
-              <p className="text-xs text-slate-500 mt-1">No hay cobros pendientes por cobrar en este momento.</p>
+            <div className="bg-white border-2 border-gray-200 rounded-2xl p-8 text-center text-gray-600">
+              <CheckCircle2 className="w-10 h-10 text-emerald-600 mx-auto mb-2" />
+              <p className="font-extrabold text-base text-black">¡Ruta al día!</p>
+              <p className="text-xs text-gray-600 mt-1">
+                No hay más cobros pendientes en la ruta de hoy.
+              </p>
             </div>
           ) : (
             cobrosDeHoy.map(({ prestamo, cliente, cuota }, idx) => {
@@ -229,76 +185,57 @@ export function CobradorView() {
               return (
                 <div
                   key={prestamo.id}
-                  className={`bg-slate-900 border rounded-2xl p-4 shadow-md transition-all ${
-                    isMora ? 'border-red-900/50 bg-red-950/10' : 'border-slate-800 hover:border-slate-700'
+                  className={`bg-white border-2 rounded-2xl p-4 shadow-xs transition-all ${
+                    isMora ? 'border-rose-400 bg-rose-50/20' : 'border-gray-300 hover:border-black'
                   }`}
                 >
-                  {/* Encabezado cliente y orden */}
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-bold text-xs flex items-center justify-center shrink-0">
+                  {/* Encabezado del cliente */}
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-7 h-7 rounded-full bg-gray-900 text-white font-black text-xs flex items-center justify-center shrink-0 mt-0.5">
                         {idx + 1}
                       </span>
                       <div>
-                        <h4 className="font-extrabold text-sm text-white leading-tight">
+                        <h3 className="font-black text-base text-black leading-tight">
                           {cliente.nombre_completo}
-                        </h4>
-                        <p className="text-[11px] text-slate-400 font-medium">
-                          {cliente.negocio || cliente.alias || 'Cliente particular'}
+                        </h3>
+                        <p className="text-xs font-bold text-emerald-900 mt-0.5">
+                          {cliente.negocio || cliente.alias || 'Negocio particular'}
                         </p>
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      <span className="text-[10px] text-slate-400 block font-medium">Cuota hoy</span>
-                      <span className="font-black text-sm text-emerald-400 tabular-nums">
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-600 block">
+                        Cuota de hoy
+                      </span>
+                      <span className="font-black text-lg text-black tabular-nums block leading-tight">
                         {formatMoney(valorCobro)}
                       </span>
                     </div>
                   </div>
 
-                  {/* Dirección y Teléfono */}
-                  <div className="text-xs text-slate-400 space-y-1 mb-3 pt-1 border-t border-slate-800/60">
-                    <div className="flex items-center gap-1.5 truncate">
-                      <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                      <span className="truncate">{cliente.direccion}</span>
+                  {/* Dirección en Valledupar y saldo */}
+                  <div className="text-xs text-gray-700 py-2 border-t border-b border-gray-200 space-y-1 my-2">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-gray-900 shrink-0" />
+                      <span className="font-bold text-black">{cliente.direccion}</span>
                     </div>
 
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[11px] text-slate-500">
-                        Saldo restante: <strong className="text-slate-300">{formatMoney(prestamo.saldo_pendiente)}</strong>
+                    <div className="flex items-center justify-between text-[11px] pt-0.5">
+                      <span className="font-semibold text-gray-600">
+                        Saldo restante: <strong className="text-black">{formatMoney(prestamo.saldo_pendiente)}</strong>
                       </span>
                       {isMora && (
-                        <span className="text-[10px] bg-red-500/20 text-red-400 font-bold px-1.5 py-0.5 rounded border border-red-500/30">
+                        <span className="text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 px-2 py-0.5 rounded border border-rose-300">
                           Atrasado
                         </span>
                       )}
                     </div>
                   </div>
 
-                  {/* Botones de acción directa */}
-                  <div className="grid grid-cols-3 gap-2 pt-1 border-t border-slate-800/80">
-                    {/* Botón WhatsApp */}
-                    <a
-                      href={`https://wa.me/57${cliente.telefono.replace(/\D/g, '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 py-2 rounded-xl text-xs font-semibold border border-slate-700"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5" />
-                      Chat
-                    </a>
-
-                    {/* Botón Llamar */}
-                    <a
-                      href={`tel:${cliente.telefono.replace(/\D/g, '')}`}
-                      className="flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 text-blue-400 py-2 rounded-xl text-xs font-semibold border border-slate-700"
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                      Llamar
-                    </a>
-
-                    {/* Botón COBRAR (Grande y Destacado) */}
+                  {/* Botón Principal de Cobro (Grande y prominente) */}
+                  <div className="space-y-2 pt-1">
                     <button
                       onClick={() =>
                         setSelectedForPayment({
@@ -307,11 +244,34 @@ export function CobradorView() {
                           cuota,
                         })
                       }
-                      className="flex items-center justify-center gap-1 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold py-2 px-3 rounded-xl text-xs shadow-md shadow-emerald-950 transition-transform active:scale-95"
+                      className="w-full py-3 px-4 rounded-xl font-black text-sm text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] transition-all shadow-xs flex items-center justify-center gap-2"
                     >
-                      Cobrar
+                      <span>Cobrar {formatMoney(valorCobro)}</span>
+                      <ArrowRight className="w-4 h-4 stroke-[3]" />
                     </button>
+
+                    {/* Botones secundarios (WhatsApp y Llamada) */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <a
+                        href={`https://wa.me/57${cliente.telefono.replace(/\D/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-emerald-900 border border-gray-300 py-2 rounded-xl text-xs font-bold"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>WhatsApp</span>
+                      </a>
+
+                      <a
+                        href={`tel:${cliente.telefono.replace(/\D/g, '')}`}
+                        className="flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-blue-900 border border-gray-300 py-2 rounded-xl text-xs font-bold"
+                      >
+                        <Phone className="w-3.5 h-3.5 text-blue-700" />
+                        <span>Llamar</span>
+                      </a>
+                    </div>
                   </div>
+
                 </div>
               );
             })
@@ -319,192 +279,78 @@ export function CobradorView() {
         </div>
       )}
 
-      {/* CONTENIDO TAB 2: MIS PRÉSTAMOS */}
-      {activeTab === 'prestamos' && (
-        <div className="space-y-3">
-          {/* Filtros */}
-          <div className="flex gap-1.5 overflow-x-auto pb-1 text-[11px] font-semibold">
-            {[
-              { id: 'todos', label: 'Todos' },
-              { id: 'aprobados', label: `Listos p/ entrega (${aprobadosParaEntrega.length})` },
-              { id: 'activos', label: 'Activos' },
-              { id: 'pendientes', label: 'Por Autorizar' },
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setFiltroPrestamos(f.id as any)}
-                className={`px-3 py-1.5 rounded-lg whitespace-nowrap border transition-all ${
-                  filtroPrestamos === f.id
-                    ? 'bg-slate-200 text-slate-900 border-white font-bold'
-                    : 'bg-slate-900 text-slate-400 border-slate-800'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {misPrestamos
-            .filter((p) => {
-              if (filtroPrestamos === 'aprobados') return p.estado === 'aprobado';
-              if (filtroPrestamos === 'activos') return p.estado === 'activo' || p.estado === 'mora';
-              if (filtroPrestamos === 'pendientes') return p.estado === 'pendiente';
-              return true;
-            })
-            .map((p) => {
-              const cliente = clientes.find((c) => c.id === p.cliente_id);
-              const badge = getEstadoPrestamoBadge(p.estado);
-
-              return (
-                <div
-                  key={p.id}
-                  className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md space-y-3"
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <span className="text-[10px] font-mono text-slate-400 font-bold block">
-                        {p.codigo}
-                      </span>
-                      <h4 className="font-extrabold text-sm text-white">
-                        {cliente?.nombre_completo || 'Cliente'}
-                      </h4>
-                      <p className="text-xs text-slate-400">{cliente?.negocio || cliente?.direccion}</p>
-                    </div>
-
-                    <span
-                      className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border ${badge.bg} ${badge.text} ${badge.border}`}
-                    >
-                      {badge.label}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 bg-slate-800/40 p-2.5 rounded-xl text-center text-xs">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">Capital</span>
-                      <span className="font-bold text-white tabular-nums">{formatMoney(p.capital)}</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">Cuota ({p.frecuencia})</span>
-                      <span className="font-bold text-emerald-400 tabular-nums">
-                        {formatMoney(p.valor_cuota)} x {p.num_cuotas}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">Saldo</span>
-                      <span className="font-bold text-amber-400 tabular-nums">
-                        {formatMoney(p.saldo_pendiente)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* ACCIÓN ESPECÍFICA SI ESTÁ APROBADO: DESEMBOLSAR */}
-                  {p.estado === 'aprobado' && (
-                    <div className="bg-blue-950/30 border border-blue-500/40 rounded-xl p-3">
-                      <p className="text-xs text-blue-200 font-medium mb-2">
-                        Autorizado por Supervisor {p.supervisor_nombre || ''}. ¿Ya le entregaste el dinero al cliente?
-                      </p>
-                      <button
-                        onClick={() => {
-                          if (confirm(`¿Confirmas entregar ${formatMoney(p.capital)} en efectivo a ${cliente?.nombre_completo}?`)) {
-                            desembolsarPrestamo(p.id);
-                          }
-                        }}
-                        className="w-full bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs py-2.5 rounded-lg shadow-lg shadow-blue-950 flex items-center justify-center gap-1.5"
-                      >
-                        <Wallet className="w-4 h-4" />
-                        Entregar Dinero ({formatMoney(p.capital)}) y Activar Cobro
-                      </button>
-                    </div>
-                  )}
-
-                  {p.estado === 'pendiente' && (
-                    <p className="text-[11px] text-amber-400/90 italic bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
-                      Esperando verificación y autorización del Supervisor en la Oficina.
-                    </p>
-                  )}
-
-                  {p.estado === 'rechazado' && (
-                    <p className="text-[11px] text-rose-400 bg-rose-500/10 p-2 rounded-lg border border-rose-500/20">
-                      Motivo rechazo: {p.motivo_rechazo || 'No especificado'}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-        </div>
-      )}
-
-      {/* CONTENIDO TAB 3: MI CAJA DEL DÍA (CUADRE) */}
-      {activeTab === 'caja' && (
+      {/* ============================================================== */}
+      {/* SECCIÓN 2: ARQUEO DE CAJA LIMPIO Y SIN RUIDO                   */}
+      {/* ============================================================== */}
+      {vistaInterna === 'caja' && (
         <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h4 className="font-bold text-sm text-white flex items-center gap-2">
-                <Wallet className="w-4 h-4 text-amber-400" />
-                Arqueo de Caja del Día
-              </h4>
-              <span className="text-xs text-slate-400">{formatDate(today)}</span>
+          <div className="bg-white border-2 border-gray-300 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-200">
+              <div>
+                <h3 className="font-black text-base text-black flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-amber-600" />
+                  Arqueo de Caja del Día
+                </h3>
+                <span className="text-xs font-semibold text-gray-500">Valledupar, Cesar</span>
+              </div>
+              <span className="text-xs font-extrabold text-black bg-gray-100 border border-gray-300 px-2.5 py-1 rounded-lg">
+                Cobrador: Brayan Martínez
+              </span>
             </div>
 
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between py-1">
-                <span className="text-slate-400">(+) Base inicial con la que saliste:</span>
-                <span className="font-bold text-white tabular-nums">{formatMoney(cierreCaja.base_inicial)}</span>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between py-1 border-b border-gray-100">
+                <span className="text-gray-600 font-semibold">(+) Base inicial de salida:</span>
+                <span className="font-extrabold text-black tabular-nums">{formatMoney(cierreCaja.base_inicial)}</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-emerald-400 font-semibold">(+) Total cobrado hoy:</span>
-                <span className="font-extrabold text-emerald-400 tabular-nums">{formatMoney(cierreCaja.total_cobrado)}</span>
+              <div className="flex justify-between py-1 border-b border-gray-100">
+                <span className="text-emerald-700 font-bold">(+) Total cobrado en ruta hoy:</span>
+                <span className="font-black text-emerald-700 tabular-nums">{formatMoney(cierreCaja.total_cobrado)}</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-blue-400">(-) Total desembolsado en préstamos:</span>
-                <span className="font-bold text-blue-400 tabular-nums">-{formatMoney(cierreCaja.total_desembolsado)}</span>
+              <div className="flex justify-between py-1 border-b border-gray-100">
+                <span className="text-blue-700 font-semibold">(-) Total prestado / desembolsado:</span>
+                <span className="font-extrabold text-blue-700 tabular-nums">-{formatMoney(cierreCaja.total_desembolsado)}</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-rose-400">(-) Total gastos operativos:</span>
-                <span className="font-bold text-rose-400 tabular-nums">-{formatMoney(cierreCaja.total_gastos)}</span>
+              <div className="flex justify-between py-1 border-b border-gray-100">
+                <span className="text-rose-700 font-semibold">(-) Gastos (gasolina moto, etc.):</span>
+                <span className="font-extrabold text-rose-700 tabular-nums">-{formatMoney(cierreCaja.total_gastos)}</span>
               </div>
               
-              <div className="flex justify-between pt-2 border-t border-slate-700 text-sm font-black">
-                <span className="text-white">EFECTIVO A ENTREGAR:</span>
-                <span className="text-amber-400 tabular-nums">{formatMoney(efectivoEnMano)}</span>
+              <div className="flex justify-between pt-3 text-base font-black border-t-2 border-black">
+                <span className="text-black uppercase">Efectivo Físico a Entregar:</span>
+                <span className="text-emerald-700 text-lg tabular-nums">{formatMoney(efectivoEnMano)}</span>
               </div>
             </div>
 
-            {/* Estado del cuadre */}
             <div className="pt-2">
               {cierreCaja.estado === 'abierto' ? (
                 <button
                   onClick={handleEnviarCierre}
-                  className="w-full bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs py-3 rounded-xl shadow-lg shadow-amber-950 flex items-center justify-center gap-2"
+                  className="w-full bg-black hover:bg-gray-800 text-white font-black text-sm py-3.5 rounded-xl shadow-xs active:scale-[0.98] transition-all"
                 >
-                  <Send className="w-4 h-4" />
-                  Enviar Cierre de Caja al Supervisor
+                  Entregar y Cerrar Caja con el Supervisor
                 </button>
-              ) : cierreCaja.estado === 'pendiente_revision' ? (
-                <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-xl text-center text-xs text-amber-300 font-semibold">
-                  ⏳ Cierre enviado. En espera de aprobación por el Supervisor.
-                </div>
               ) : (
-                <div className="bg-emerald-500/10 border border-emerald-500/30 p-3 rounded-xl text-center text-xs text-emerald-300 font-bold">
-                  ✓ Cuadre de caja verificado y aprobado por el Supervisor.
+                <div className="bg-emerald-50 border-2 border-emerald-300 p-3 rounded-xl text-center text-xs font-black text-emerald-900">
+                  ✓ Cierre enviado a revisión del Supervisor en Oficina.
                 </div>
               )}
             </div>
           </div>
 
-          {/* Registrar Gasto en Calle (Gasolina, parqueadero, etc.) */}
+          {/* Registro de Gastos de Calle */}
           {cierreCaja.estado === 'abierto' && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
-              <h4 className="font-bold text-xs text-slate-300 uppercase tracking-wider mb-2">
-                Registrar Gasto de Calle
+            <div className="bg-white border-2 border-gray-200 rounded-2xl p-4 space-y-3">
+              <h4 className="font-black text-xs uppercase text-gray-800 tracking-wider">
+                Registrar Gasto de Calle (Gasolina, Parqueo)
               </h4>
-              <form onSubmit={handleAgregarGasto} className="space-y-2.5">
+              <form onSubmit={handleAgregarGasto} className="space-y-2">
                 <input
                   type="text"
-                  placeholder="Concepto (Ej. Gasolina moto, pinchada...)"
+                  placeholder="Concepto (ej. Gasolina moto La Nevada)..."
                   value={nuevoGastoConcepto}
                   onChange={(e) => setNuevoGastoConcepto(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                  className="w-full bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold text-black placeholder-gray-500 focus:outline-none focus:border-black"
                   required
                 />
                 <div className="flex gap-2">
@@ -514,35 +360,23 @@ export function CobradorView() {
                     step="1000"
                     value={nuevoGastoMonto}
                     onChange={(e) => setNuevoGastoMonto(e.target.value)}
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                    className="flex-1 bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-black text-black placeholder-gray-500 focus:outline-none focus:border-black"
                     required
                   />
                   <button
                     type="submit"
-                    className="bg-slate-700 hover:bg-slate-600 text-white font-bold text-xs px-4 rounded-lg"
+                    className="bg-gray-900 hover:bg-black text-white font-bold text-xs px-4 rounded-xl"
                   >
-                    + Registrar Gasto
+                    + Registrar
                   </button>
                 </div>
               </form>
-
-              {cierreCaja.gastos_detalle && cierreCaja.gastos_detalle.length > 0 && (
-                <div className="mt-3 pt-2 border-t border-slate-800 space-y-1">
-                  <span className="text-[10px] text-slate-500 uppercase font-semibold">Gastos de hoy:</span>
-                  {cierreCaja.gastos_detalle.map((g, i) => (
-                    <div key={i} className="flex justify-between text-xs text-slate-300">
-                      <span>• {g.concepto}</span>
-                      <span className="font-mono text-rose-400">-{formatMoney(g.monto)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
         </div>
       )}
 
-      {/* MODALES */}
+      {/* Modal de cobro */}
       {selectedForPayment && (
         <PaymentModal
           prestamo={selectedForPayment.prestamo}
@@ -552,18 +386,6 @@ export function CobradorView() {
         />
       )}
 
-      {showNewLoanModal && (
-        <NewLoanModal onClose={() => setShowNewLoanModal(false)} />
-      )}
-
     </div>
-  );
-}
-
-function CheckCircle(props: any) {
-  return (
-    <svg {...props} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-    </svg>
   );
 }

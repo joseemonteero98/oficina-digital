@@ -2,117 +2,71 @@
 
 import React from 'react';
 import { useApp } from '@/lib/store';
-import { UserRole } from '@/types';
-import { Building2, Shield, UserCheck, Bike, Sparkles, ChevronDown } from 'lucide-react';
+import { Menu, PlusCircle, Building2 } from 'lucide-react';
 
-export function Header() {
-  const { currentRole, switchRole, currentUser, oficinas, selectedOficinaId, setSelectedOficinaId, isDbConnected } = useApp();
+interface HeaderProps {
+  onOpenDrawer: () => void;
+  onOpenNewLoan: () => void;
+}
 
-  const roles: { id: UserRole; label: string; icon: any; color: string }[] = [
-    { id: 'cobrador', label: 'Cobrador', icon: Bike, color: 'text-amber-500 bg-amber-500/10 border-amber-500/30' },
-    { id: 'supervisor', label: 'Supervisor', icon: Shield, color: 'text-blue-500 bg-blue-500/10 border-blue-500/30' },
-    { id: 'admin', label: 'Administrador', icon: UserCheck, color: 'text-purple-500 bg-purple-500/10 border-purple-500/30' },
-    { id: 'dueno', label: 'Dueño', icon: Sparkles, color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/30' },
-  ];
+export function Header({ onOpenDrawer, onOpenNewLoan }: HeaderProps) {
+  const { currentRole, isDbConnected } = useApp();
 
-  const currentOffice = oficinas.find((o) => o.id === selectedOficinaId);
+  const getTitulo = () => {
+    switch (currentRole) {
+      case 'cobrador':
+        return 'Ruta de Cobro';
+      case 'supervisor':
+        return 'Bandeja Supervisor';
+      case 'admin':
+        return 'Administración';
+      case 'dueno':
+        return 'Panel Propietario';
+      default:
+        return 'Oficina Digital';
+    }
+  };
 
   return (
-    <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 text-white px-3 sm:px-6 py-2.5">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-2.5">
+    <header className="sticky top-0 z-30 bg-white border-b border-gray-200 px-4 py-3 shadow-xs">
+      <div className="max-w-2xl mx-auto flex items-center justify-between">
         
-        {/* Logo y contexto de oficina */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center font-black text-slate-950 text-lg shadow-lg shadow-emerald-500/20">
-              OF
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h1 className="font-bold text-base sm:text-lg tracking-tight text-white leading-tight">
-                  Oficina Digital
-                </h1>
-                <span className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border flex items-center gap-1 ${
-                  isDbConnected
-                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${isDbConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                  {isDbConnected ? 'Postgres Conectado' : 'Modo Demo'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 flex items-center gap-1">
-                <Building2 className="w-3 h-3 text-slate-500" />
-                {currentRole === 'dueno' && selectedOficinaId === 'todas'
-                  ? 'Todas las Oficinas (Consolidado)'
-                  : currentOffice?.nombre || 'Oficina Central'}
-              </p>
-            </div>
+        {/* Botón de Menú Desplegable a la Izquierda */}
+        <button
+          onClick={onOpenDrawer}
+          className="flex items-center gap-2 p-2 -ml-2 rounded-xl text-black hover:bg-gray-100 transition-colors"
+          aria-label="Abrir menú de secciones"
+        >
+          <Menu className="w-6 h-6 stroke-[2.5]" />
+          <div className="text-left">
+            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block leading-none">
+              Valledupar
+            </span>
+            <h1 className="text-sm font-black text-black leading-tight">
+              {getTitulo()}
+            </h1>
           </div>
+        </button>
 
-          {/* Selector de oficina rápida (para dueño / admin) */}
-          {(currentRole === 'dueno' || currentRole === 'admin') && (
-            <div className="md:hidden">
-              <select
-                value={selectedOficinaId}
-                onChange={(e) => setSelectedOficinaId(e.target.value)}
-                className="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2 py-1 text-slate-200 focus:outline-none"
-              >
-                {currentRole === 'dueno' && <option value="todas">Todas las Oficinas</option>}
-                {oficinas.map((ofi) => (
-                  <option key={ofi.id} value={ofi.id}>
-                    {ofi.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
+        {/* Acciones Rápidas a la Derecha */}
+        <div className="flex items-center gap-2">
+          {currentRole === 'cobrador' && (
+            <button
+              onClick={onOpenNewLoan}
+              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-2 px-3.5 rounded-xl shadow-xs active:scale-95 transition-all"
+            >
+              <PlusCircle className="w-4 h-4 stroke-[2.5]" />
+              <span>+ Prestar</span>
+            </button>
           )}
-        </div>
 
-        {/* Simulador interactivo de roles (para probar todos los perfiles) */}
-        <div className="flex items-center justify-between sm:justify-end gap-2 pt-1 md:pt-0 border-t md:border-t-0 border-slate-800">
-          <div className="text-[11px] text-slate-400 font-medium hidden sm:block">
-            Probar como:
-          </div>
-          <div className="grid grid-cols-4 sm:flex gap-1.5 w-full sm:w-auto">
-            {roles.map((r) => {
-              const Icon = r.icon;
-              const isActive = currentRole === r.id;
-              return (
-                <button
-                  key={r.id}
-                  onClick={() => switchRole(r.id)}
-                  className={`flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
-                    isActive
-                      ? `${r.color} shadow-sm font-bold scale-[1.02]`
-                      : 'bg-slate-800/80 hover:bg-slate-800 text-slate-400 border-slate-700/60'
-                  }`}
-                  title={`Ver interfaz desde el rol de ${r.label}`}
-                >
-                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{r.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Selector de oficina en Desktop */}
-          {(currentRole === 'dueno' || currentRole === 'admin') && (
-            <div className="hidden md:block ml-2">
-              <select
-                value={selectedOficinaId}
-                onChange={(e) => setSelectedOficinaId(e.target.value)}
-                className="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                {currentRole === 'dueno' && <option value="todas">🏢 Todas las Oficinas</option>}
-                {oficinas.map((ofi) => (
-                  <option key={ofi.id} value={ofi.id}>
-                    🏢 {ofi.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          {/* Indicador de conexión */}
+          <span
+            className={`w-2.5 h-2.5 rounded-full ${
+              isDbConnected ? 'bg-emerald-600' : 'bg-amber-500'
+            }`}
+            title={isDbConnected ? 'Conectado a Neon Postgres' : 'Modo Demo'}
+          />
         </div>
 
       </div>
