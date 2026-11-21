@@ -24,7 +24,7 @@ export function PaymentModal({ prestamo, cliente, cuota, onClose }: PaymentModal
   const [nota, setNota] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
@@ -44,7 +44,7 @@ export function PaymentModal({ prestamo, cliente, cuota, onClose }: PaymentModal
     }
 
     try {
-      registrarCobro({
+      await registrarCobro({
         prestamo_id: prestamo.id,
         cuota_id: cuota?.id,
         monto: montoFinal,

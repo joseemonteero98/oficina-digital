@@ -6,7 +6,7 @@ import { UserRole } from '@/types';
 import { Building2, Shield, UserCheck, Bike, Sparkles, ChevronDown } from 'lucide-react';
 
 export function Header() {
-  const { currentRole, switchRole, currentUser, oficinas, selectedOficinaId, setSelectedOficinaId } = useApp();
+  const { currentRole, switchRole, currentUser, oficinas, selectedOficinaId, setSelectedOficinaId, isDbConnected } = useApp();
 
   const roles: { id: UserRole; label: string; icon: any; color: string }[] = [
     { id: 'cobrador', label: 'Cobrador', icon: Bike, color: 'text-amber-500 bg-amber-500/10 border-amber-500/30' },
@@ -32,8 +32,13 @@ export function Header() {
                 <h1 className="font-bold text-base sm:text-lg tracking-tight text-white leading-tight">
                   Oficina Digital
                 </h1>
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  MVP
+                <span className={`text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border flex items-center gap-1 ${
+                  isDbConnected
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isDbConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  {isDbConnected ? 'Postgres Conectado' : 'Modo Demo'}
                 </span>
               </div>
               <p className="text-xs text-slate-400 flex items-center gap-1">

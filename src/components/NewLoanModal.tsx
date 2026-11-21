@@ -52,13 +52,13 @@ export function NewLoanModal({ onClose }: NewLoanModalProps) {
     });
   }, [capital, tasaInteres, tipoInteres, numCuotas, frecuencia, excluirDomingos, fechaPrimerCobro]);
 
-  const handleCrearNuevoCliente = (e: React.FormEvent) => {
+  const handleCrearNuevoCliente = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nuevoNombre || !nuevoDoc || !nuevoTel || !nuevaDir) {
       alert('Por favor completa todos los campos del cliente');
       return;
     }
-    const creado = crearCliente({
+    const creado = await crearCliente({
       oficina_id: selectedOficinaId === 'todas' ? 'ofi-1' : selectedOficinaId,
       ruta_id: rutas[0]?.id || 'ruta-1',
       cobrador_id: currentUser.id,
@@ -73,7 +73,7 @@ export function NewLoanModal({ onClose }: NewLoanModalProps) {
     setModoCrearCliente(false);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clienteId) {
       alert('Selecciona un cliente para el préstamo');
@@ -85,7 +85,7 @@ export function NewLoanModal({ onClose }: NewLoanModalProps) {
     }
 
     try {
-      crearSolicitudPrestamo({
+      await crearSolicitudPrestamo({
         cliente_id: clienteId,
         capital,
         tasa_interes: tasaInteres,

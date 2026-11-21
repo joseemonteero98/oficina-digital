@@ -31,6 +31,7 @@ interface AppContextType {
   switchRole: (role: UserRole) => void;
   selectedOficinaId: string; // 'todas' o un id de oficina
   setSelectedOficinaId: (id: string) => void;
+  isDbConnected: boolean;
 
   // Colecciones
   oficinas: Oficina[];
@@ -42,7 +43,7 @@ interface AppContextType {
   pagos: RegistroPago[];
 
   // Acciones de Clientes
-  crearCliente: (cliente: Omit<Cliente, 'id' | 'created_at' | 'orden_ruta'>) => Cliente;
+  crearCliente: (cliente: Omit<Cliente, 'id' | 'created_at' | 'orden_ruta'>) => Promise<Cliente>;
 
   // Acciones de Préstamos
   crearSolicitudPrestamo: (datos: {
@@ -55,10 +56,10 @@ interface AppContextType {
     excluir_domingos: boolean;
     fecha_primer_cobro: string;
     notas?: string;
-  }) => Prestamo;
+  }) => Promise<Prestamo>;
 
-  autorizarPrestamo: (prestamoId: string, aprobado: boolean, motivoRechazo?: string) => void;
-  desembolsarPrestamo: (prestamoId: string) => void;
+  autorizarPrestamo: (prestamoId: string, aprobado: boolean, motivoRechazo?: string) => Promise<void>;
+  desembolsarPrestamo: (prestamoId: string) => Promise<void>;
 
   // Acciones de Cobro
   registrarCobro: (params: {
@@ -68,7 +69,7 @@ interface AppContextType {
     tipo: TipoPago;
     motivoNoPago?: string;
     nota?: string;
-  }) => RegistroPago;
+  }) => Promise<RegistroPago>;
 
   // Acciones de Caja
   registrarGastoCaja: (concepto: string, monto: number) => void;
@@ -84,12 +85,13 @@ const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [oficinas, setOficinas] = useState<Oficina[]>(INITIAL_OFICINAS);
-  const [usuarios] = useState<Usuario[]>(INITIAL_USUARIOS);
-  const [rutas] = useState<Ruta[]>(INITIAL_RUTAS);
+  const [usuarios, setUsuarios] = useState<Usuario[]>(INITIAL_USUARIOS);
+  const [rutas, setRutas] = useState<Ruta[]>(INITIAL_RUTAS);
   const [clientes, setClientes] = useState<Cliente[]>(INITIAL_CLIENTES);
   const [prestamos, setPrestamos] = useState<Prestamo[]>(INITIAL_PRESTAMOS);
   const [cierreCaja, setCierreCaja] = useState<CierreCaja>(INITIAL_CIERRE_CAJA);
   const [pagos, setPagos] = useState<RegistroPago[]>([]);
+  const [isDbConnected, setIsDbConnected] = useState<boolean>(false);
 
   // Rol activo (por defecto cobrador para probar la experiencia smartphone primero)
   const [currentRole, setCurrentRole] = useState<UserRole>('cobrador');
@@ -100,6 +102,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     cliente: Cliente;
   } | null>(null);
 
+  // Cargar datos reales desde Neon Postgres en arranque
+  useEffect(() => {
+    async function cargarDatosDb() {
+      try {
+        const res = await fetch('/api/bootstrap');
+        const data = await res.json();
+        if (data && data.connected) {
+          setIsDbConnected(true);
+          if (data.oficinas?.length) setOficinas(data.oficinas);
+          if (data.usuarios?.length) setUsuarios(data.usuarios);
+          if (data.rutas?.length) setRutas(data.rutas);
+          if (data.clientes?.length) setClientes(data.clientes);
+          if (data.prestamos?.length) setPrestamos(data.prestamos);
+          if (data.cierreCaja) setCierreCaja(data.cierreCaja);
+        }
+      } catch (err) {
+        console.warn('Ejecutando con datos locales de contingencia:', err);
+      }
+    }
+    cargarDatosDb();
+  }, []);
+
   // Obtener el usuario según el rol seleccionado
   const currentUser = usuarios.find((u) => u.rol === currentRole) || usuarios[0];
 
@@ -108,24 +132,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (role === 'dueno') {
       setSelectedOficinaId('todas');
     } else {
-      setSelectedOficinaId('ofi-1');
+      setSelectedOficinaId(oficinas[0]?.id || 'ofi-1');
     }
   };
 
-  // Crear Cliente
-  const crearCliente = (datos: Omit<Cliente, 'id' | 'created_at' | 'orden_ruta'>): Cliente => {
-    const nuevo: Cliente = {
+  // Crear Cliente con sincronización a Neon Postgres
+  const crearCliente = async (datos: Omit<Cliente, 'id' | 'created_at' | 'orden_ruta'>): Promise<Cliente> => {
+    const nuevoLocal: Cliente = {
       ...datos,
       id: `cli-${Date.now()}`,
       orden_ruta: clientes.length + 1,
       created_at: getTodayString(),
     };
-    setClientes((prev) => [...prev, nuevo]);
-    return nuevo;
+    setClientes((prev) => [...prev, nuevoLocal]);
+
+    try {
+      const res = await fetch('/api/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(datos),
+      });
+      const data = await res.json();
+      if (data?.cliente?.id) {
+        setClientes((prev) =>
+          prev.map((c) => (c.id === nuevoLocal.id ? { ...c, id: data.cliente.id } : c))
+        );
+        return { ...nuevoLocal, id: data.cliente.id };
+      }
+    } catch (err) {
+      console.warn('Guardado localmente:', err);
+    }
+
+    return nuevoLocal;
   };
 
-  // Crear Solicitud de Préstamo (Cobrador solicita -> estado pendiente)
-  const crearSolicitudPrestamo = (datos: {
+  // Crear Solicitud de Préstamo con persistencia en Neon Postgres
+  const crearSolicitudPrestamo = async (datos: {
     cliente_id: string;
     capital: number;
     tasa_interes: number;
@@ -135,7 +177,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     excluir_domingos: boolean;
     fecha_primer_cobro: string;
     notas?: string;
-  }): Prestamo => {
+  }): Promise<Prestamo> => {
     const cliente = clientes.find((c) => c.id === datos.cliente_id);
     const calculo = simularPrestamo({
       capital: datos.capital,
@@ -149,11 +191,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     const prestamoId = `p-${Date.now()}`;
     const cuotas = generarCuotasEntidad(prestamoId, calculo);
+    const oficinaId = cliente?.oficina_id || selectedOficinaId;
 
     const nuevoPrestamo: Prestamo = {
       id: prestamoId,
       codigo: `PR-${Math.floor(1000 + Math.random() * 9000)}`,
-      oficina_id: cliente?.oficina_id || selectedOficinaId,
+      oficina_id: oficinaId,
       cliente_id: datos.cliente_id,
       cliente,
       cobrador_id: currentUser.id,
@@ -171,17 +214,40 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       excluir_domingos: datos.excluir_domingos,
       fecha_solicitud: getTodayString(),
       fecha_primer_cobro: datos.fecha_primer_cobro,
-      estado: 'pendiente', // Requiere autorización de supervisor
+      estado: 'pendiente',
       notas: datos.notas,
       cuotas,
     };
 
     setPrestamos((prev) => [nuevoPrestamo, ...prev]);
+
+    try {
+      const res = await fetch('/api/prestamos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...datos,
+          oficina_id: oficinaId,
+          cobrador_id: currentUser.id,
+        }),
+      });
+      const data = await res.json();
+      if (data?.prestamoId) {
+        setPrestamos((prev) =>
+          prev.map((p) =>
+            p.id === prestamoId ? { ...p, id: data.prestamoId, codigo: data.codigo } : p
+          )
+        );
+      }
+    } catch (err) {
+      console.warn('Guardado localmente:', err);
+    }
+
     return nuevoPrestamo;
   };
 
   // Supervisor: Autorizar o Rechazar Préstamo
-  const autorizarPrestamo = (prestamoId: string, aprobado: boolean, motivoRechazo?: string) => {
+  const autorizarPrestamo = async (prestamoId: string, aprobado: boolean, motivoRechazo?: string) => {
     setPrestamos((prev) =>
       prev.map((p) => {
         if (p.id !== prestamoId) return p;
@@ -195,10 +261,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
       })
     );
+
+    try {
+      await fetch(`/api/prestamos/${prestamoId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accion: aprobado ? 'aprobar' : 'rechazar',
+          supervisor_id: currentUser.id,
+          motivo_rechazo: motivoRechazo,
+        }),
+      });
+    } catch (err) {
+      console.warn('Actualizado localmente:', err);
+    }
   };
 
   // Cobrador: Desembolsar (Entrega el dinero en efectivo al cliente)
-  const desembolsarPrestamo = (prestamoId: string) => {
+  const desembolsarPrestamo = async (prestamoId: string) => {
     setPrestamos((prev) =>
       prev.map((p) => {
         if (p.id !== prestamoId) return p;
@@ -210,7 +290,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       })
     );
 
-    // Descontar del dinero en caja del cobrador
     const p = prestamos.find((item) => item.id === prestamoId);
     if (p) {
       setCierreCaja((prev) => {
@@ -224,28 +303,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         };
       });
     }
+
+    try {
+      await fetch(`/api/prestamos/${prestamoId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accion: 'desembolsar' }),
+      });
+    } catch (err) {
+      console.warn('Actualizado localmente:', err);
+    }
   };
 
-  // Cobrador: Registrar Cobro (Completo, Abono, o No Pago)
-  const registrarCobro = (params: {
+  // Cobrador: Registrar Cobro
+  const registrarCobro = async (params: {
     prestamo_id: string;
     cuota_id?: string;
     monto: number;
     tipo: TipoPago;
     motivoNoPago?: string;
     nota?: string;
-  }): RegistroPago => {
+  }): Promise<RegistroPago> => {
     const prestamo = prestamos.find((p) => p.id === params.prestamo_id);
     if (!prestamo) throw new Error('Préstamo no encontrado');
 
     const cliente = clientes.find((c) => c.id === prestamo.cliente_id)!;
-
     let saldoRestante = prestamo.saldo_pendiente;
 
     if (params.tipo !== 'no_pago') {
       saldoRestante = Math.max(0, prestamo.saldo_pendiente - params.monto);
 
-      // Actualizar cuotas del préstamo
       setPrestamos((prev) =>
         prev.map((p) => {
           if (p.id !== params.prestamo_id) return p;
@@ -283,7 +370,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         })
       );
 
-      // Sumar a la caja del día
       setCierreCaja((prev) => {
         const nuevoCobrado = prev.total_cobrado + params.monto;
         const nuevoEsperado = prev.base_inicial + nuevoCobrado - prev.total_desembolsado - prev.total_gastos;
@@ -316,13 +402,27 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     setPagos((prev) => [nuevoPago, ...prev]);
 
-    // Disparar comprobante
     const updatedPrestamo = {
       ...prestamo,
       saldo_pendiente: saldoRestante,
       total_recaudado: prestamo.total_recaudado + (params.tipo !== 'no_pago' ? params.monto : 0),
     };
     setActiveReceipt({ pago: nuevoPago, prestamo: updatedPrestamo, cliente });
+
+    try {
+      await fetch('/api/pagos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          cliente_id: prestamo.cliente_id,
+          cobrador_id: currentUser.id,
+          oficina_id: prestamo.oficina_id,
+        }),
+      });
+    } catch (err) {
+      console.warn('Pago registrado localmente:', err);
+    }
 
     return nuevoPago;
   };
@@ -375,6 +475,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         switchRole,
         selectedOficinaId,
         setSelectedOficinaId,
+        isDbConnected,
         oficinas,
         usuarios,
         clientes,
