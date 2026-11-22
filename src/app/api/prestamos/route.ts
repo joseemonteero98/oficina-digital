@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { sql, isDbConfigured } from '@/lib/db';
-import { simularPrestamo } from '@/lib/calculations';
+import { simularPrestamo, generarCuotasEntidad } from '@/lib/calculations';
 
 export async function POST(request: Request) {
   try {
@@ -19,20 +19,26 @@ export async function POST(request: Request) {
       notas,
     } = body;
 
+    if (!cliente_id || Number(capital) <= 0 || Number(num_cuotas) <= 0) {
+      return NextResponse.json(
+        { success: false, error: 'Datos incompletos o inválidos para crear la solicitud.' },
+        { status: 400 }
+      );
+    }
+
     const calculo = simularPrestamo({
       capital: Number(capital),
       tasa_interes: Number(tasa_interes),
       tipo_interes,
       num_cuotas: Number(num_cuotas),
       frecuencia,
-      excluir_domingos,
+      excluir_domingos: Boolean(excluir_domingos),
       fecha_primer_cobro,
     });
 
     const codigo = `PR-${Math.floor(1000 + Math.random() * 9000)}`;
 
     if (isDbConfigured && sql) {
-      // 1. Insertar préstamo en Neon Postgres
       const result = await sql`
         INSERT INTO prestamos (
           codigo,
@@ -59,30 +65,31 @@ export async function POST(request: Request) {
           ${oficina_id},
           ${cliente_id},
           ${cobrador_id},
-          ${capital},
-          ${tipo_interes},
-          ${tasa_interes},
+          ${calculo.capital},
+          ${calculo.tipo_interes},
+          ${calculo.tasa_interes},
           ${calculo.total_interes},
           ${calculo.total_a_pagar},
           ${calculo.total_a_pagar},
           0,
-          ${frecuencia},
-          ${num_cuotas},
+          ${calculo.frecuencia},
+          ${calculo.num_cuotas},
           ${calculo.valor_cuota},
-          ${excluir_domingos},
+          ${Boolean(excluir_domingos)},
           CURRENT_DATE,
-          ${fecha_primer_cobro},
+          ${calculo.fecha_primer_pago},
           'pendiente',
           ${notas || null}
         )
-        RETURNING id
+        RETURNING *
       `;
 
-      const prestamoId = result[0].id;
+      const prestamoDb = result[0];
+      const prestamoId = prestamoDb.id;
+      const cuotasInsertadas = [];
 
-      // 2. Insertar cuotas generadas
       for (const c of calculo.cuotas_simuladas) {
-        await sql`
+        const cRes = await sql`
           INSERT INTO cuotas (
             prestamo_id,
             oficina_id,
@@ -104,7 +111,17 @@ export async function POST(request: Request) {
             0,
             'pendiente'
           )
+          RETURNING *
         `;
+        cuotasInsertadas.push({
+          ...cRes[0],
+          numero_cuota: Number(cRes[0].numero_cuota),
+          fecha_vencimiento: String(cRes[0].fecha_vencimiento).split('T')[0],
+          monto_capital: Number(cRes[0].monto_capital),
+          monto_interes: Number(cRes[0].monto_interes),
+          monto_total: Number(cRes[0].monto_total),
+          monto_pagado: Number(cRes[0].monto_pagado),
+        });
       }
 
       return NextResponse.json({
@@ -112,16 +129,23 @@ export async function POST(request: Request) {
         prestamoId,
         codigo,
         calculo,
+        cuotas: cuotasInsertadas,
       });
     }
 
+    const demoId = `p-${Date.now()}`;
     return NextResponse.json({
       success: true,
+      prestamoId: demoId,
       codigo,
       calculo,
+      cuotas: generarCuotasEntidad(demoId, calculo),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error al crear préstamo en DB:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'No se pudo registrar la solicitud de préstamo.' },
+      { status: 500 }
+    );
   }
 }

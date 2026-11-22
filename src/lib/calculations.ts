@@ -1,25 +1,9 @@
-import { FrecuenciaPago, TipoInteres, Cuota } from '@/types';
+import { FrecuenciaPago, TipoInteres, Cuota, SimulacionPrestamo } from '@/types';
 
-export interface CalculoPrestamoResult {
-  capital: number;
-  tipo_interes: TipoInteres;
-  tasa_interes: number;
-  total_interes: number;
-  total_a_pagar: number;
-  valor_cuota: number;
-  num_cuotas: number;
-  cuotas_simuladas: {
-    numero: number;
-    fecha: string;
-    monto_capital: number;
-    monto_interes: number;
-    monto_total: number;
-    saldo_restante: number;
-  }[];
-}
+export type CalculoPrestamoResult = SimulacionPrestamo;
 
 /**
- * Agrega días hábiles o continuos a una fecha
+ * Agrega días hábiles o continuos a una fecha respetando exclusión de domingos
  */
 export function calcularFechasCuotas(
   fechaInicioStr: string,
@@ -28,12 +12,14 @@ export function calcularFechasCuotas(
   excluirDomingos: boolean
 ): string[] {
   const fechas: string[] = [];
-  const fecha = new Date(fechaInicioStr + 'T12:00:00');
+  const baseDate = fechaInicioStr && fechaInicioStr.includes('-')
+    ? fechaInicioStr.split('T')[0]
+    : new Date().toISOString().split('T')[0];
+  const fecha = new Date(baseDate + 'T12:00:00');
 
   let cuotasGeneradas = 0;
   while (cuotasGeneradas < numCuotas) {
     if (frecuencia === 'diario') {
-      // Si excluye domingos y cae domingo (0), avanzamos al lunes
       if (excluirDomingos && fecha.getDay() === 0) {
         fecha.setDate(fecha.getDate() + 1);
       }
@@ -41,14 +27,23 @@ export function calcularFechasCuotas(
       fecha.setDate(fecha.getDate() + 1);
       cuotasGeneradas++;
     } else if (frecuencia === 'semanal') {
+      if (excluirDomingos && fecha.getDay() === 0) {
+        fecha.setDate(fecha.getDate() + 1);
+      }
       fechas.push(fecha.toISOString().split('T')[0]);
       fecha.setDate(fecha.getDate() + 7);
       cuotasGeneradas++;
     } else if (frecuencia === 'quincenal') {
+      if (excluirDomingos && fecha.getDay() === 0) {
+        fecha.setDate(fecha.getDate() + 1);
+      }
       fechas.push(fecha.toISOString().split('T')[0]);
       fecha.setDate(fecha.getDate() + 15);
       cuotasGeneradas++;
     } else if (frecuencia === 'mensual') {
+      if (excluirDomingos && fecha.getDay() === 0) {
+        fecha.setDate(fecha.getDate() + 1);
+      }
       fechas.push(fecha.toISOString().split('T')[0]);
       fecha.setMonth(fecha.getMonth() + 1);
       cuotasGeneradas++;
@@ -59,17 +54,17 @@ export function calcularFechasCuotas(
 }
 
 /**
- * Simula el préstamo según el modo (Fijo Simple vs Sobre Saldo)
+ * Motor financiero oficial (ejecutado en el servidor como única fuente de verdad)
  */
 export function simularPrestamo(params: {
   capital: number;
-  tasa_interes: number; // Porcentaje, ej. 20
+  tasa_interes: number;
   tipo_interes: TipoInteres;
   num_cuotas: number;
   frecuencia: FrecuenciaPago;
   excluir_domingos: boolean;
   fecha_primer_cobro: string;
-}): CalculoPrestamoResult {
+}): SimulacionPrestamo {
   const {
     capital,
     tasa_interes,
@@ -80,29 +75,30 @@ export function simularPrestamo(params: {
     fecha_primer_cobro,
   } = params;
 
+  const safeCapital = Math.max(0, Number(capital) || 0);
+  const safeCuotas = Math.max(1, Math.floor(Number(num_cuotas) || 1));
+  const safeTasa = Math.max(0, Number(tasa_interes) || 0);
+
   const fechas = calcularFechasCuotas(
     fecha_primer_cobro,
-    num_cuotas,
+    safeCuotas,
     frecuencia,
     excluir_domingos
   );
 
   if (tipo_interes === 'fijo') {
-    // Interés simple fijo (Paga diario estándar):
-    // Interés total = Capital * (Tasa / 100)
-    // Se divide en cuotas iguales.
-    const total_interes = Math.round(capital * (tasa_interes / 100));
-    const total_a_pagar = capital + total_interes;
-    const valor_cuota = Math.round(total_a_pagar / num_cuotas);
+    const total_interes = Math.round(safeCapital * (safeTasa / 100));
+    const total_a_pagar = safeCapital + total_interes;
+    const valor_cuota = Math.round(total_a_pagar / safeCuotas);
+    const diferencia_redondeo = total_a_pagar - valor_cuota * safeCuotas;
 
-    const cuota_capital = Math.round(capital / num_cuotas);
+    const cuota_capital = Math.round(safeCapital / safeCuotas);
     const cuota_interes = valor_cuota - cuota_capital;
 
     let saldo = total_a_pagar;
     const cuotas_simuladas = fechas.map((fecha, idx) => {
       const numero = idx + 1;
-      // Para la última cuota ajustamos centavos si hay desfase
-      const monto = numero === num_cuotas ? saldo : valor_cuota;
+      const monto = numero === safeCuotas ? Math.max(0, saldo) : valor_cuota;
       saldo -= monto;
       return {
         numero,
@@ -115,36 +111,39 @@ export function simularPrestamo(params: {
     });
 
     return {
-      capital,
+      capital: safeCapital,
       tipo_interes,
-      tasa_interes,
+      tasa_interes: safeTasa,
       total_interes,
       total_a_pagar,
       valor_cuota,
-      num_cuotas,
+      num_cuotas: safeCuotas,
+      frecuencia,
+      fecha_primer_pago: fechas[0] || fecha_primer_cobro,
+      fecha_ultimo_pago: fechas[fechas.length - 1] || fecha_primer_cobro,
+      diferencia_redondeo,
       cuotas_simuladas,
     };
   } else {
-    // Interés sobre saldo (Sistema Francés / Amortizado por período)
-    const r = (tasa_interes / 100); // Tasa periódica
+    const r = safeTasa / 100;
     let valor_cuota = 0;
     if (r > 0) {
       valor_cuota = Math.round(
-        (capital * r * Math.pow(1 + r, num_cuotas)) /
-          (Math.pow(1 + r, num_cuotas) - 1)
+        (safeCapital * r * Math.pow(1 + r, safeCuotas)) /
+          (Math.pow(1 + r, safeCuotas) - 1)
       );
     } else {
-      valor_cuota = Math.round(capital / num_cuotas);
+      valor_cuota = Math.round(safeCapital / safeCuotas);
     }
 
-    let saldoCapital = capital;
+    let saldoCapital = safeCapital;
     let totalInteresAcumulado = 0;
     const cuotas_simuladas = fechas.map((fecha, idx) => {
       const numero = idx + 1;
       const interesPeriodo = Math.round(saldoCapital * r);
       let amortizacionCapital = valor_cuota - interesPeriodo;
 
-      if (numero === num_cuotas || amortizacionCapital > saldoCapital) {
+      if (numero === safeCuotas || amortizacionCapital > saldoCapital) {
         amortizacionCapital = saldoCapital;
       }
 
@@ -162,27 +161,32 @@ export function simularPrestamo(params: {
       };
     });
 
-    const total_a_pagar = capital + totalInteresAcumulado;
+    const total_a_pagar = safeCapital + totalInteresAcumulado;
+    const diferencia_redondeo = total_a_pagar - valor_cuota * safeCuotas;
 
     return {
-      capital,
+      capital: safeCapital,
       tipo_interes,
-      tasa_interes,
+      tasa_interes: safeTasa,
       total_interes: totalInteresAcumulado,
       total_a_pagar,
       valor_cuota,
-      num_cuotas,
+      num_cuotas: safeCuotas,
+      frecuencia,
+      fecha_primer_pago: fechas[0] || fecha_primer_cobro,
+      fecha_ultimo_pago: fechas[fechas.length - 1] || fecha_primer_cobro,
+      diferencia_redondeo,
       cuotas_simuladas,
     };
   }
 }
 
 /**
- * Convierte cuotas simuladas en entidades Cuota reales para la base de datos
+ * Convierte cuotas simuladas en entidades Cuota reales
  */
 export function generarCuotasEntidad(
   prestamoId: string,
-  calculo: CalculoPrestamoResult
+  calculo: SimulacionPrestamo
 ): Cuota[] {
   return calculo.cuotas_simuladas.map((c) => ({
     id: `cuota-${prestamoId}-${c.numero}`,
